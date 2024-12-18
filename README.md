@@ -1,4 +1,4 @@
-# Go-MySQL-Driver
+  # Go-MySQL-Driver
 
 A MySQL-Driver for Go's [database/sql](https://golang.org/pkg/database/sql/) package
 

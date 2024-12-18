@@ -1,7 +1,7 @@
 package mysql
 
 import (
-	"database/sql/driver"
+	"fmt"
 	"strconv"
 	"time"
 )
@@ -30,6 +30,8 @@ const (
 	// String types
 	TypeChar    = "char"
 	TypeVarChar = "varchar"
+
+	TypeBoolean = "boolean"
 
 	// Text types
 	TypeTinyText   = "tinytext"
@@ -72,19 +74,11 @@ var (
 
 type ExternalDriver struct {
 	// con - dummy connection to mysql that used the internal to encode values
-	con *mysqlConn
 	Loc *time.Location
 }
 
 func NewExternalDriver() *ExternalDriver {
 	return &ExternalDriver{
-		con: &mysqlConn{
-			buf:              newBuffer(nil),
-			maxAllowedPacket: maxPacketSize,
-			cfg: &Config{
-				InterpolateParams: true,
-			},
-		},
 		Loc: time.Now().Location(),
 	}
 }
@@ -94,44 +88,95 @@ func (e *ExternalDriver) WithLocation(loc *time.Location) *ExternalDriver {
 	return e
 }
 
-func (e *ExternalDriver) EncodeValueByTypeName(name string, src any, buf []byte, opts ...TypeOption) ([]byte, error) {
-	res, err := e.con.interpolateParams("?", []driver.Value{src})
-	if err != nil {
-		return nil, err
+func (e *ExternalDriver) EncodeValueByTypeName(name string, src any, buf []byte) ([]byte, error) {
+	switch name {
+	case TypeJSON:
+		return encodeJson(src, buf)
+	case TypeTimestamp,
+		TypeDateTime,
+		TypeDate:
+		return encodeTimestamp(src, buf, e.Loc)
+	case TypeTinyInt, TypeSmallInt, TypeMediumInt, TypeInt, TypeBigInt, TypeTime, TypeYear:
+		return encodeInt64(src, buf)
+	case TypeFloat, TypeDouble, TypeReal:
+		return encodeFloat(src, buf)
+	case TypeChar, TypeVarChar, TypeTinyText, TypeText, TypeMediumText, TypeLongText:
+		return encodeString(src, buf)
+	case TypeBoolean:
+		return encodeBool(src, buf)
+	case TypeBinary, TypeVarBinary, TypeTinyBlob, TypeBlob, TypeMediumBlob, TypeLongBlob:
+		return encodeBinary(src, buf)
+	case TypeEnum, TypeSet:
+		return encodeEnum(src, buf)
+	case TypeGeometry, TypePoint, TypeLineString, TypePolygon, TypeMultiPoint, TypeMultiLineString,
+		TypeMultiPolygon, TypeGeometryCollection:
+		return encodeGeometry(src, buf)
+	case TypeDecimal, TypeNumeric:
+		return encodeDecimal(src, buf)
 	}
-	if len(res) > 0 {
-		res = res[1 : len(res)-1]
-	}
-	return []byte(res), nil
+	return nil, fmt.Errorf("unsupported type %s", name)
 }
 
-func (e *ExternalDriver) DecodeValueByTypeName(name string, src []byte, opts ...TypeOption) (any, error) {
+func (e *ExternalDriver) DecodeValueByTypeName(name string, src []byte) (any, error) {
+	// Consider opts pattern usage
 	switch name {
+	case TypeJSON:
+		return string(src), nil
 	case TypeTimestamp,
 		TypeDateTime,
 		TypeDate:
 		return parseDateTime(src, e.Loc)
-
 	case TypeTinyInt, TypeSmallInt, TypeMediumInt, TypeInt, TypeBigInt, TypeTime, TypeYear:
-		//case fieldTypeTiny, fieldTypeShort, fieldTypeInt24, fieldTypeYear, fieldTypeLong:
-		if hasOptions(opts, TypeOptionUnsigned) {
-			return strconv.ParseUint(string(src), 10, 64)
-		} else {
-			return strconv.ParseInt(string(src), 10, 64)
-		}
-
+		// Here may be unsigned type consider to add it but it is likely redundant
+		return strconv.ParseInt(string(src), 10, 64)
 	case TypeFloat, TypeDouble, TypeReal:
 		return strconv.ParseFloat(string(src), 64)
 	case TypeChar, TypeVarChar, TypeTinyText, TypeText, TypeMediumText, TypeLongText:
 		return string(src), nil
+	case TypeBoolean:
+		return decodeBool(src)
+	case TypeBinary, TypeVarBinary, TypeTinyBlob, TypeBlob, TypeMediumBlob, TypeLongBlob:
+		// I suspect there might be some hex encoding
+		return src, nil
+	case TypeEnum, TypeSet:
+		return decodeEnum(src)
+	case TypeGeometry, TypePoint, TypeLineString, TypePolygon, TypeMultiPoint, TypeMultiLineString,
+		TypeMultiPolygon, TypeGeometryCollection:
+		return decodeGeometry(src)
+	case TypeDecimal, TypeNumeric:
+		return decodeDecimal(src)
 	}
-	return src, nil
+	return nil, fmt.Errorf("unsupported type %s", name)
 }
 
 func (e *ExternalDriver) ScanValueByTypeName(name string, src []byte, dest any) error {
-
-	//TODO implement me
-	panic("implement me")
+	switch name {
+	case TypeJSON:
+		return scanJson(src, dest)
+	case TypeTimestamp,
+		TypeDateTime,
+		TypeDate:
+		return scanTimestamp(src, dest, e.Loc)
+	case TypeTinyInt, TypeSmallInt, TypeMediumInt, TypeInt, TypeBigInt, TypeTime, TypeYear:
+		return scanInt64(src, dest)
+	case TypeFloat, TypeDouble, TypeReal:
+		return scanFloat(src, dest)
+	case TypeChar, TypeVarChar, TypeTinyText, TypeText, TypeMediumText, TypeLongText:
+		return scanString(src, dest)
+	case TypeBoolean:
+		return scanBool(src, dest)
+	case TypeBinary, TypeVarBinary, TypeTinyBlob, TypeBlob, TypeMediumBlob, TypeLongBlob:
+		// I suspect there might be some hex encoding
+		return scanBinary(src, dest)
+	case TypeEnum, TypeSet:
+		return scanEnum(src, dest)
+	case TypeGeometry, TypePoint, TypeLineString, TypePolygon, TypeMultiPoint, TypeMultiLineString,
+		TypeMultiPolygon, TypeGeometryCollection:
+		return scanGeometry(src, dest)
+	case TypeDecimal, TypeNumeric:
+		return scanDecimal(src, dest)
+	}
+	return fmt.Errorf("unsupported type %s", name)
 }
 
 func hasOptions(opts []TypeOption, opt TypeOption) bool {
@@ -141,5 +186,4 @@ func hasOptions(opts []TypeOption, opt TypeOption) bool {
 		}
 	}
 	return false
-
 }
